@@ -1,0 +1,17 @@
+# Design documentation (for now, move to public once finalized/more established)
+
+CLAUDE.md
+DECISIONS.md
+PROJECT.md
+DESIGN.md
+LEARNING.md
+SPEC.md
+
+# Python tooling
+.venv/
+.hypothesis/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
