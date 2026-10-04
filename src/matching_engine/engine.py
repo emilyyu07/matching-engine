@@ -15,6 +15,7 @@ from matching_engine.types import (
     LimitOrder,
     MarketOrder,
     OrderId,
+    Price,
     Quantity,
     Side,
     StpId,
@@ -35,15 +36,23 @@ def remove_order(
     return handle
 
 
-def cancel(book: Book, index: OrderIndex, order_id: OrderId) -> bool:
-    return remove_order(book, index, order_id) is not None
-
-
 class Engine:
     def __init__(self) -> None:
-        self.book = Book()
-        self.index = OrderIndex()
-        self.counter = SeqCounter()
+        self._book = Book()
+        self._index = OrderIndex()
+        self._counter = SeqCounter()
+
+    def best_bid(self) -> Price | None:
+        return self._book.best_bid()
+
+    def best_ask(self) -> Price | None:
+        return self._book.best_ask()
+
+    def depth(self, side: Side) -> list[tuple[Price, int]]:
+        return self._book.depth(side)
+
+    def is_resting(self, order_id: OrderId) -> bool:
+        return self._index.lookup(order_id) is not None
 
     def submit_limit_order(
         self,
@@ -54,7 +63,7 @@ class Engine:
         stp_id: StpId | None = None,
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
-        seq = self.counter.advance()
+        seq = self._counter.advance()
         price_result = make_price(price)
         if isinstance(price_result, str):
             return [Rejected(seq=seq, reason=price_result)]
@@ -81,7 +90,7 @@ class Engine:
         stp_id: StpId | None = None,
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
-        seq = self.counter.advance()
+        seq = self._counter.advance()
         qty_result = make_quantity(qty)
         if isinstance(qty_result, str):
             return [Rejected(seq=seq, reason=qty_result)]
@@ -96,8 +105,19 @@ class Engine:
         )
         return self._process_new_order(order)
 
-    def cancel(self, order_id: OrderId) -> bool:
-        return cancel(self.book, self.index, order_id)
+    def cancel(self, order_id: OrderId) -> list[Event]:
+        seq = self._counter.advance()
+        handle = remove_order(self._book, self._index, order_id)
+        if handle is None:
+            return [Rejected(seq=seq, reason=f"order {order_id} is not resting")]
+        return [
+            Cancelled(
+                order_id=order_id,
+                remaining=handle.order.remaining,
+                purpose=CancelPurpose.REQUESTED,
+                seq=seq,
+            )
+        ]
 
     def _process_new_order(self, order: LimitOrder | MarketOrder) -> list[Event]:
         events: list[Event] = []
@@ -105,7 +125,7 @@ class Engine:
         self_trade_stopped = False
 
         while order.remaining > 0:
-            resting_handle = self.book.front_handle(opposite_side)
+            resting_handle = self._book.front_handle(opposite_side)
             if resting_handle is None:
                 break
             resting = resting_handle.order
@@ -127,13 +147,14 @@ class Engine:
                 if order.stp_policy is StpPolicy.CANCEL_NEWEST:
                     self_trade_stopped = True
                     break
-                removed = remove_order(self.book, self.index, resting.id)
+                removed = remove_order(self._book, self._index, resting.id)
                 assert removed is not None
                 events.append(
                     Cancelled(
                         order_id=resting.id,
                         remaining=resting.remaining,
                         purpose=CancelPurpose.SELF_TRADE_PREVENTED,
+                        seq=order.seq,
                     )
                 )
                 continue
@@ -143,6 +164,7 @@ class Engine:
                 Trade(
                     resting_order_id=resting.id,
                     incoming_order_id=order.id,
+                    aggressor_side=order.side,
                     price=resting.price,
                     qty=trade_qty,
                     seq=order.seq,
@@ -151,7 +173,7 @@ class Engine:
             order.remaining = Quantity(order.remaining - trade_qty)
             resting.remaining = Quantity(resting.remaining - trade_qty)
             if resting.remaining == 0:
-                removed = remove_order(self.book, self.index, resting.id)
+                removed = remove_order(self._book, self._index, resting.id)
                 assert removed is not None
 
         if order.remaining > 0:
@@ -161,14 +183,16 @@ class Engine:
                         order_id=order.id,
                         remaining=order.remaining,
                         purpose=CancelPurpose.SELF_TRADE_PREVENTED,
+                        seq=order.seq,
                     )
                 )
             elif isinstance(order, LimitOrder):
-                handle = self.book.add(order)
-                self.index.register(order.id, handle)
+                handle = self._book.add(order)
+                self._index.register(order.id, handle)
                 events.append(
                     Rested(
                         order_id=order.id,
+                        side=order.side,
                         price=order.price,
                         remaining=order.remaining,
                         seq=order.seq,
@@ -180,6 +204,7 @@ class Engine:
                         order_id=order.id,
                         remaining=order.remaining,
                         purpose=CancelPurpose.UNFILLED,
+                        seq=order.seq,
                     )
                 )
 
