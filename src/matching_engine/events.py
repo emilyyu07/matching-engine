@@ -26,6 +26,7 @@ class Rested:
 class CancelPurpose(Enum):
     REQUESTED = "requested"
     UNFILLED = "unfilled"
+    SELF_TRADE_PREVENTED = "self_trade_prevented"
 
 
 @dataclass(frozen=True)

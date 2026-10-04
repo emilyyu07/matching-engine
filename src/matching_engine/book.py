@@ -64,6 +64,13 @@ class Book:
         levels = self._levels(order.side)
         return levels.setdefault(order.price, _Level()).append(order)
 
+    def front_handle(self, side: Side) -> OrderHandle | None:
+        levels = self._levels(side)
+        if not levels:
+            return None
+        _, level = levels.peekitem(-1) if side is Side.BUY else levels.peekitem(0)
+        return level.head
+
     def remove(self, node: OrderHandle) -> None:
         order = node.order
         levels = self._levels(order.side)

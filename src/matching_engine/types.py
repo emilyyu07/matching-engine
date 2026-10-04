@@ -1,6 +1,6 @@
 """Core value types: orders, sides, prices and quantities."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import NewType
 
@@ -8,6 +8,7 @@ Price = NewType("Price", int)
 Quantity = NewType("Quantity", int)
 OrderId = NewType("OrderId", int)
 SeqNo = NewType("SeqNo", int)
+StpId = NewType("StpId", int)
 
 
 def make_price(raw: int) -> Price | str:
@@ -27,6 +28,11 @@ class Side(Enum):
     SELL = "sell"
 
 
+class StpPolicy(Enum):
+    CANCEL_NEWEST = "cancel_newest"
+    CANCEL_OLDEST = "cancel_oldest"
+
+
 @dataclass
 class _OrderBase:
     id: OrderId
@@ -34,6 +40,8 @@ class _OrderBase:
     qty: Quantity
     remaining: Quantity
     seq: SeqNo
+    stp_id: StpId | None = field(default=None, kw_only=True)
+    stp_policy: StpPolicy | None = field(default=None, kw_only=True)
 
 
 @dataclass

@@ -161,6 +161,26 @@ def test_book_remove_best_levels_only_order_falls_back_to_next_best() -> None:
     assert book.best_bid() == 100
 
 
+def test_front_handle_on_empty_side_returns_none() -> None:
+    book = Book()
+    assert book.front_handle(Side.BUY) is None
+
+
+def test_front_handle_returns_head_of_best_level() -> None:
+    book = Book()
+    worse = book.add(_limit_order(1, Side.BUY, 100, 5, 1))
+    best = book.add(_limit_order(2, Side.BUY, 101, 3, 2))
+    assert book.front_handle(Side.BUY) is best
+    assert worse.order.id == 1  # sanity: worse untouched, just not the front
+
+
+def test_front_handle_is_the_oldest_order_at_that_level() -> None:
+    book = Book()
+    first = book.add(_limit_order(1, Side.BUY, 100, 5, 1))
+    book.add(_limit_order(2, Side.BUY, 100, 2, 2))
+    assert book.front_handle(Side.BUY) is first
+
+
 def test_book_remove_best_asks_only_order_falls_back_to_next_best() -> None:
     book = Book()
     book.add(_limit_order(1, Side.SELL, 105, 5, 1))
