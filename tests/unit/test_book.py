@@ -204,3 +204,11 @@ def test_book_remove_on_already_removed_handle_raises_and_does_not_corrupt() -> 
         book.remove(second_node)
 
     assert book.depth(Side.BUY) == [(100, 5)]
+
+
+def test_removing_a_stale_handle_after_its_level_is_gone_raises_value_error() -> None:
+    book = Book()
+    handle = book.add(_limit_order(1, Side.BUY, 100, 5, 1))
+    book.remove(handle)
+    with pytest.raises(ValueError):
+        book.remove(handle)

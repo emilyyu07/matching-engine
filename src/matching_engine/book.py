@@ -72,6 +72,8 @@ class Book:
         return level.head
 
     def remove(self, node: OrderHandle) -> None:
+        if node.removed:
+            raise ValueError("order already removed from its price level")
         order = node.order
         levels = self._levels(order.side)
         level = levels[order.price]

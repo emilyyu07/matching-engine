@@ -256,7 +256,9 @@ def test_read_only_queries_reflect_both_sides() -> None:
 
 def test_self_trade_prevention_cancel_newest_stops_matching_and_does_not_rest() -> None:
     engine = Engine()
-    engine.submit_limit_order(Side.SELL, 100, 5, stp_id=StpId(1))
+    engine.submit_limit_order(
+        Side.SELL, 100, 5, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_NEWEST
+    )
     events = engine.submit_limit_order(
         Side.BUY,
         100,
@@ -278,7 +280,9 @@ def test_self_trade_prevention_cancel_newest_stops_matching_and_does_not_rest() 
 def test_cancel_newest_after_partial_fill_cancels_only_the_remainder() -> None:
     engine = Engine()
     engine.submit_limit_order(Side.SELL, 100, 2)  # other owner
-    engine.submit_limit_order(Side.SELL, 100, 5, stp_id=StpId(1))
+    engine.submit_limit_order(
+        Side.SELL, 100, 5, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_NEWEST
+    )
     events = engine.submit_limit_order(
         Side.BUY,
         100,
@@ -308,7 +312,9 @@ def test_cancel_newest_after_partial_fill_cancels_only_the_remainder() -> None:
 
 def test_self_trade_prevention_cancel_oldest_removes_resting_and_continues() -> None:
     engine = Engine()
-    engine.submit_limit_order(Side.SELL, 100, 5, stp_id=StpId(1))
+    engine.submit_limit_order(
+        Side.SELL, 100, 5, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_NEWEST
+    )
     engine.submit_limit_order(Side.SELL, 100, 3)
     events = engine.submit_limit_order(
         Side.BUY,
@@ -338,8 +344,12 @@ def test_self_trade_prevention_cancel_oldest_removes_resting_and_continues() -> 
 
 def test_cancel_oldest_removes_several_consecutive_self_orders() -> None:
     engine = Engine()
-    engine.submit_limit_order(Side.SELL, 100, 1, stp_id=StpId(1))
-    engine.submit_limit_order(Side.SELL, 100, 1, stp_id=StpId(1))
+    engine.submit_limit_order(
+        Side.SELL, 100, 1, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_NEWEST
+    )
+    engine.submit_limit_order(
+        Side.SELL, 100, 1, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_NEWEST
+    )
     engine.submit_limit_order(Side.SELL, 101, 4)
     events = engine.submit_limit_order(
         Side.BUY,
@@ -354,7 +364,9 @@ def test_cancel_oldest_removes_several_consecutive_self_orders() -> None:
 
 def test_cancel_oldest_works_for_market_orders() -> None:
     engine = Engine()
-    engine.submit_limit_order(Side.BUY, 100, 5, stp_id=StpId(1))
+    engine.submit_limit_order(
+        Side.BUY, 100, 5, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_NEWEST
+    )
     events = engine.submit_market_order(
         Side.SELL, 3, stp_id=StpId(1), stp_policy=StpPolicy.CANCEL_OLDEST
     )
@@ -371,4 +383,27 @@ def test_cancel_oldest_works_for_market_orders() -> None:
             purpose=CancelPurpose.UNFILLED,
             seq=2,
         ),
+    ]
+
+
+def test_float_price_is_rejected() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order(Side.BUY, 100.5, 5)  # type: ignore[arg-type]
+    assert events == [Rejected(seq=1, reason="price must be an integer, got 100.5")]
+    assert engine.best_bid() is None
+
+
+def test_stp_id_without_policy_is_rejected() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order(Side.BUY, 100, 5, stp_id=StpId(1))
+    assert events == [
+        Rejected(seq=1, reason="stp_id and stp_policy must be set together")
+    ]
+
+
+def test_stp_policy_without_id_is_rejected_for_market_orders_too() -> None:
+    engine = Engine()
+    events = engine.submit_market_order(Side.BUY, 5, stp_policy=StpPolicy.CANCEL_OLDEST)
+    assert events == [
+        Rejected(seq=1, reason="stp_id and stp_policy must be set together")
     ]

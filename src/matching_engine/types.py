@@ -12,12 +12,18 @@ StpId = NewType("StpId", int)
 
 
 def make_price(raw: int) -> Price | str:
+    # Exact type check: bool is an int subclass, and nothing stops a
+    # runtime caller from passing a float despite the annotation.
+    if type(raw) is not int:
+        return f"price must be an integer, got {raw}"
     if raw <= 0:
         return f"price must be > 0, got {raw}"
     return Price(raw)
 
 
 def make_quantity(raw: int) -> Quantity | str:
+    if type(raw) is not int:
+        return f"quantity must be an integer, got {raw}"
     if raw <= 0:
         return f"quantity must be > 0, got {raw}"
     return Quantity(raw)

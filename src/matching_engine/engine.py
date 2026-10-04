@@ -36,6 +36,12 @@ def remove_order(
     return handle
 
 
+def _stp_error(stp_id: StpId | None, stp_policy: StpPolicy | None) -> str | None:
+    if (stp_id is None) != (stp_policy is None):
+        return "stp_id and stp_policy must be set together"
+    return None
+
+
 class Engine:
     def __init__(self) -> None:
         self._book = Book()
@@ -70,6 +76,9 @@ class Engine:
         qty_result = make_quantity(qty)
         if isinstance(qty_result, str):
             return [Rejected(seq=seq, reason=qty_result)]
+        stp_error = _stp_error(stp_id, stp_policy)
+        if stp_error is not None:
+            return [Rejected(seq=seq, reason=stp_error)]
         order = LimitOrder(
             id=OrderId(seq),
             side=side,
@@ -94,6 +103,9 @@ class Engine:
         qty_result = make_quantity(qty)
         if isinstance(qty_result, str):
             return [Rejected(seq=seq, reason=qty_result)]
+        stp_error = _stp_error(stp_id, stp_policy)
+        if stp_error is not None:
+            return [Rejected(seq=seq, reason=stp_error)]
         order = MarketOrder(
             id=OrderId(seq),
             side=side,
@@ -118,6 +130,13 @@ class Engine:
                 seq=seq,
             )
         ]
+
+    def _remove_resting(self, order_id: OrderId) -> None:
+        # Called only for an order the loop just read from the book, so it
+        # must be in the index. Explicit raise, not assert: asserts vanish
+        # under `python -O`.
+        if remove_order(self._book, self._index, order_id) is None:
+            raise RuntimeError(f"order index out of sync with book: {order_id}")
 
     def _process_new_order(self, order: LimitOrder | MarketOrder) -> list[Event]:
         events: list[Event] = []
@@ -147,8 +166,7 @@ class Engine:
                 if order.stp_policy is StpPolicy.CANCEL_NEWEST:
                     self_trade_stopped = True
                     break
-                removed = remove_order(self._book, self._index, resting.id)
-                assert removed is not None
+                self._remove_resting(resting.id)
                 events.append(
                     Cancelled(
                         order_id=resting.id,
@@ -160,6 +178,11 @@ class Engine:
                 continue
 
             trade_qty = Quantity(min(order.remaining, resting.remaining))
+            if trade_qty <= 0:
+                raise RuntimeError(
+                    f"matching made no progress: resting order {resting.id} "
+                    f"has remaining {resting.remaining}"
+                )
             events.append(
                 Trade(
                     resting_order_id=resting.id,
@@ -173,8 +196,7 @@ class Engine:
             order.remaining = Quantity(order.remaining - trade_qty)
             resting.remaining = Quantity(resting.remaining - trade_qty)
             if resting.remaining == 0:
-                removed = remove_order(self._book, self._index, resting.id)
-                assert removed is not None
+                self._remove_resting(resting.id)
 
         if order.remaining > 0:
             if self_trade_stopped:

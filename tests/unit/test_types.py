@@ -90,3 +90,19 @@ def test_order_remaining_is_mutable_in_place() -> None:
     )
     order.remaining = Quantity(4)
     assert order.remaining == 4
+
+
+def test_make_price_rejects_float() -> None:
+    assert make_price(100.5) == "price must be an integer, got 100.5"  # type: ignore[arg-type]
+
+
+def test_make_price_rejects_bool() -> None:
+    assert make_price(True) == "price must be an integer, got True"
+
+
+def test_make_quantity_rejects_float() -> None:
+    assert make_quantity(2.5) == "quantity must be an integer, got 2.5"  # type: ignore[arg-type]
+
+
+def test_make_quantity_rejects_bool() -> None:
+    assert make_quantity(True) == "quantity must be an integer, got True"

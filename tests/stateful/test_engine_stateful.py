@@ -32,8 +32,16 @@ from matching_engine.events import (
 from matching_engine.types import OrderId, Price, Side, StpId, StpPolicy
 
 sides = st.sampled_from([Side.BUY, Side.SELL])
-stp_ids = st.sampled_from([None, StpId(1), StpId(2)])
-stp_policies = st.sampled_from([None, StpPolicy.CANCEL_NEWEST, StpPolicy.CANCEL_OLDEST])
+# Mostly valid (both unset, or both set); the third branch also yields
+# mismatched pairs, which must be rejected.
+stp_pairs = st.one_of(
+    st.just((None, None)),
+    st.tuples(st.sampled_from([StpId(1), StpId(2)]), st.sampled_from(StpPolicy)),
+    st.tuples(
+        st.sampled_from([None, StpId(1), StpId(2)]),
+        st.sampled_from([None, *StpPolicy]),
+    ),
+)
 
 
 @dataclass
@@ -78,6 +86,8 @@ class EngineStateMachine(RuleBasedStateMachine):
 
     def _apply_new_order(self, events: list[Event], incoming: _Incoming) -> None:
         self._check_seq(events)
+        if (incoming.stp_id is None) != (incoming.stp_policy is None):
+            assert isinstance(events[0], Rejected)
         if isinstance(events[0], Rejected):
             return
         self.stp_of[incoming.id] = incoming.stp_id
@@ -129,17 +139,16 @@ class EngineStateMachine(RuleBasedStateMachine):
         side=sides,
         price=st.integers(min_value=1, max_value=6),
         qty=st.integers(min_value=1, max_value=5),
-        stp_id=stp_ids,
-        stp_policy=stp_policies,
+        stp=stp_pairs,
     )
     def submit_limit(
         self,
         side: Side,
         price: int,
         qty: int,
-        stp_id: StpId | None,
-        stp_policy: StpPolicy | None,
+        stp: tuple[StpId | None, StpPolicy | None],
     ) -> None:
+        stp_id, stp_policy = stp
         events = self.engine.submit_limit_order(
             side, price, qty, stp_id=stp_id, stp_policy=stp_policy
         )
@@ -149,16 +158,15 @@ class EngineStateMachine(RuleBasedStateMachine):
     @rule(
         side=sides,
         qty=st.integers(min_value=1, max_value=8),
-        stp_id=stp_ids,
-        stp_policy=stp_policies,
+        stp=stp_pairs,
     )
     def submit_market(
         self,
         side: Side,
         qty: int,
-        stp_id: StpId | None,
-        stp_policy: StpPolicy | None,
+        stp: tuple[StpId | None, StpPolicy | None],
     ) -> None:
+        stp_id, stp_policy = stp
         events = self.engine.submit_market_order(
             side, qty, stp_id=stp_id, stp_policy=stp_policy
         )
