@@ -7,7 +7,7 @@ name = "matching-engine"
 version = "0.0.0"
 description = "Correctness-first, single-instrument limit order book and matching engine."
 requires-python = ">=3.14"
-dependencies = []
+dependencies = ["sortedcontainers>=2.4"]
 
 [project.optional-dependencies]
 dev = [
@@ -40,4 +40,4 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.14"
 strict = true
-mypy_path = "src"
+mypy_path = "src:stubs"
