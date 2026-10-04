@@ -15,6 +15,7 @@ class OrderHandle:
     order: LimitOrder
     prev: OrderHandle | None = None
     next: OrderHandle | None = None
+    removed: bool = False
 
 
 @dataclass
@@ -32,6 +33,9 @@ class _Level:
         return node
 
     def remove(self, node: OrderHandle) -> None:
+        if node.removed:
+            raise ValueError("order already removed from its price level")
+        node.removed = True
         if node.prev is None:
             self.head = node.next
         else:

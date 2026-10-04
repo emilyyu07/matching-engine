@@ -1,5 +1,7 @@
 """Unit tests for matching_engine.book.Book: insertion, best price, depth."""
 
+import pytest
+
 from matching_engine.book import Book, _Level
 from matching_engine.types import LimitOrder, OrderId, Price, Quantity, SeqNo, Side
 
@@ -157,3 +159,28 @@ def test_book_remove_best_levels_only_order_falls_back_to_next_best() -> None:
     assert book.best_bid() == 101
     book.remove(best_node)
     assert book.best_bid() == 100
+
+
+def test_book_remove_best_asks_only_order_falls_back_to_next_best() -> None:
+    book = Book()
+    book.add(_limit_order(1, Side.SELL, 105, 5, 1))
+    best_node = book.add(_limit_order(2, Side.SELL, 103, 3, 2))
+    assert book.best_ask() == 103
+    book.remove(best_node)
+    assert book.best_ask() == 105
+
+
+def test_book_remove_on_already_removed_handle_raises_and_does_not_corrupt() -> None:
+    book = Book()
+    book.add(_limit_order(1, Side.BUY, 100, 1, 1))
+    second_node = book.add(_limit_order(2, Side.BUY, 100, 2, 2))
+    third_node = book.add(_limit_order(3, Side.BUY, 100, 3, 3))
+    book.add(_limit_order(4, Side.BUY, 100, 4, 4))
+
+    book.remove(second_node)
+    book.remove(third_node)
+
+    with pytest.raises(ValueError):
+        book.remove(second_node)
+
+    assert book.depth(Side.BUY) == [(100, 5)]
