@@ -6,7 +6,7 @@ Use `pytest --hypothesis-show-statistics` to see how often examples trade.
 from collections import Counter
 from dataclasses import dataclass
 
-from hypothesis import event, given, settings
+from hypothesis import event, given, note, settings
 from hypothesis import strategies as st
 from reference.naive_engine import NaiveEngine
 
@@ -75,11 +75,23 @@ limits = st.builds(
 markets = st.builds(
     lambda side, qty, stp: Market(side, qty, *stp), sides, qtys, stp_pairs
 )
-# Ids are seqs, so 1..60 overlap live orders; 0 and negatives miss on purpose.
-# Non-int ids excluded (SPEC silent, D-09).
-cancels = st.builds(Cancel, st.integers(-2, 60).map(OrderId))
-# Limits weighted double so the book has something to match against.
-commands = st.lists(_weighted((2, limits), (1, markets), (1, cancels)), max_size=60)
+# Never-issued ids, including 0 and negatives. Non-int ids excluded (SPEC silent, D-09).
+blind_ids = st.integers(-2, 70).map(OrderId)
+
+
+def _cancels(checker: InvariantChecker) -> st.SearchStrategy[Cancel]:
+    # Mostly live orders; some finished (filled/cancelled) and blind ids for rejects.
+    pairs = [(1, blind_ids)]
+    if finished := checker.finished_ids():
+        pairs.insert(0, (1, st.sampled_from(finished)))
+    if resting := checker.resting_ids():
+        pairs.insert(0, (5, st.sampled_from(resting)))
+    return st.builds(Cancel, _weighted(*pairs))
+
+
+def _command(checker: InvariantChecker) -> st.SearchStrategy[Command]:
+    # Limits weighted double so the book has something to match against.
+    return _weighted((2, limits), (1, markets), (1, _cancels(checker)))
 
 
 def _apply(engine: Engine | NaiveEngine, cmd: Command) -> list[Event]:
@@ -125,23 +137,36 @@ def _record_coverage(events: list[Event]) -> None:
         event("has reject")
 
 
-@given(commands)
-def test_engine_matches_reference(cmds: list[Command]) -> None:
-    engine, reference = Engine(), NaiveEngine()
-    checker = InvariantChecker()
+def _drive(data: st.DataObject, reference: NaiveEngine | None) -> list[Event]:
+    """Draw and run up to 60 commands, comparing with `reference` if given."""
+    engine, checker = Engine(), InvariantChecker()
+    cmds: list[Command] = []
     seen: list[Event] = []
-    for step, cmd in enumerate(cmds):
-        got = _apply(engine, cmd)
-        want = _apply(reference, cmd)
-        assert got == want, f"events diverge at step {step}: {cmd}"
-        for side in Side:
-            assert engine.depth(side) == reference.depth(side), (
-                f"{side.name} depth diverges at step {step}: {cmd}"
-            )
-        _observe(checker, cmd, got)
-        checker.check(engine)
-        seen.extend(got)
-    _record_coverage(seen)
+    try:
+        for step in range(data.draw(st.integers(0, 60))):
+            # Drawn against the current book, so cancels can target live orders.
+            cmd = data.draw(_command(checker))
+            cmds.append(cmd)
+            got = _apply(engine, cmd)
+            if reference is not None:
+                want = _apply(reference, cmd)
+                assert got == want, f"events diverge at step {step}: {cmd}"
+                for side in Side:
+                    assert engine.depth(side) == reference.depth(side), (
+                        f"{side.name} depth diverges at step {step}: {cmd}"
+                    )
+            _observe(checker, cmd, got)
+            checker.check(engine)
+            seen.extend(got)
+    finally:
+        # A failure prints the resolved command list: a ready repro.
+        note(f"commands = {cmds}")
+    return seen
+
+
+@given(st.data())
+def test_engine_matches_reference(data: st.DataObject) -> None:
+    _record_coverage(_drive(data, NaiveEngine()))
 
 
 def test_command_mix_exercises_matching() -> None:
@@ -150,18 +175,18 @@ def test_command_mix_exercises_matching() -> None:
     seen: Counter[str] = Counter()
 
     @settings(max_examples=200, derandomize=True, database=None)
-    @given(commands)
-    def run(cmds: list[Command]) -> None:
-        engine = Engine()
-        events = [e for cmd in cmds for e in _apply(engine, cmd)]
+    @given(st.data())
+    def run(data: st.DataObject) -> None:
+        events = _drive(data, reference=None)
         seen["examples"] += 1
         seen["trade"] += any(isinstance(e, Trade) for e in events)
-        seen["stp"] += any(
-            isinstance(e, Cancelled) and e.purpose is CancelPurpose.SELF_TRADE_PREVENTED
-            for e in events
-        )
+        for purpose in (CancelPurpose.SELF_TRADE_PREVENTED, CancelPurpose.REQUESTED):
+            seen[purpose.name] += any(
+                isinstance(e, Cancelled) and e.purpose is purpose for e in events
+            )
 
     run()
-    # Floors sit just under the measured rates (26% and 8% on 2026-10-24).
-    assert seen["trade"] / seen["examples"] >= 0.20
-    assert seen["stp"] / seen["examples"] >= 0.05
+    # Far below typical (~80% trade, ~50% STP, ~80% cancel): catches a collapse.
+    assert seen["trade"] / seen["examples"] >= 0.15
+    assert seen["SELF_TRADE_PREVENTED"] / seen["examples"] >= 0.04
+    assert seen["REQUESTED"] / seen["examples"] >= 0.30

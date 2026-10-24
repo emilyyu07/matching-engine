@@ -48,6 +48,13 @@ class InvariantChecker:
         self._book: dict[OrderId, _Resting] = {}
         self._ledger: dict[OrderId, _Ledger] = {}
 
+    def resting_ids(self) -> list[OrderId]:
+        return sorted(self._book)
+
+    def finished_ids(self) -> list[OrderId]:
+        # Accepted but no longer resting: filled, cancelled, or a market order.
+        return sorted(oid for oid in self._ledger if oid not in self._book)
+
     def _check_conservation(self, order_ids: set[OrderId]) -> None:
         # 4: filled + cancelled + resting == qty. Only touched orders can change.
         for oid in order_ids:
