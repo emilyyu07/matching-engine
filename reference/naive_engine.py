@@ -83,9 +83,19 @@ class NaiveEngine:
         return min(orders, key=lambda o: (o.price, o.order_id))
 
     def _match(
-        self, seq: SeqNo, side: Side, limit_price: int | None, qty: int
-    ) -> tuple[list[Event], int]:
-        """Trade against the opposite side; return the trades and what's left."""
+        self,
+        seq: SeqNo,
+        side: Side,
+        limit_price: int | None,
+        qty: int,
+        stp_id: StpId | None,
+        stp_policy: StpPolicy | None,
+    ) -> tuple[list[Event], int, bool]:
+        """Trade against the opposite side.
+
+        Returns the events, what's left, and whether STP (Cancel Newest)
+        stopped matching.
+        """
         opposite = Side.SELL if side is Side.BUY else Side.BUY
         events: list[Event] = []
         remaining = qty
@@ -93,6 +103,24 @@ class NaiveEngine:
             front = self._front(opposite)
             if front is None or not _crosses(side, limit_price, front.price):
                 break
+            # SPEC: a self-match is an incoming order with STP set meeting a
+            # marketable front with the same stp_id. Only the incoming
+            # order's policy counts. Validation guarantees a set stp_id has
+            # a policy.
+            if stp_id is not None and front.stp_id == stp_id:
+                if stp_policy is StpPolicy.CANCEL_NEWEST:
+                    return events, remaining, True
+                # CANCEL_OLDEST: cancel the resting order, retry the new front.
+                self._book.remove(front)
+                events.append(
+                    Cancelled(
+                        order_id=front.order_id,
+                        remaining=Quantity(front.remaining),
+                        purpose=CancelPurpose.SELF_TRADE_PREVENTED,
+                        seq=seq,
+                    )
+                )
+                continue
             fill = min(remaining, front.remaining)
             events.append(
                 Trade(
@@ -109,7 +137,7 @@ class NaiveEngine:
             front.remaining -= fill
             if front.remaining == 0:
                 self._book.remove(front)
-        return events, remaining
+        return events, remaining, False
 
     def submit_limit_order(
         self,
@@ -129,8 +157,20 @@ class NaiveEngine:
         )
         if error is not None:
             return [Rejected(seq=seq, reason=error)]
-        events, remaining = self._match(seq, side, price, qty)
-        if remaining > 0:
+        events, remaining, stp_stopped = self._match(
+            seq, side, price, qty, stp_id, stp_policy
+        )
+        if stp_stopped:
+            # SPEC: Cancel Newest cancels the remainder; it never rests.
+            events.append(
+                Cancelled(
+                    order_id=OrderId(seq),
+                    remaining=Quantity(remaining),
+                    purpose=CancelPurpose.SELF_TRADE_PREVENTED,
+                    seq=seq,
+                )
+            )
+        elif remaining > 0:
             # SPEC: the remainder rests at its own price, at the back.
             self._book.append(_Resting(OrderId(seq), side, price, remaining, stp_id))
             events.append(
@@ -157,15 +197,22 @@ class NaiveEngine:
         error = _number_error("quantity", qty) or _stp_pair_error(stp_id, stp_policy)
         if error is not None:
             return [Rejected(seq=seq, reason=error)]
-        events, remaining = self._match(seq, side, None, qty)
+        events, remaining, stp_stopped = self._match(
+            seq, side, None, qty, stp_id, stp_policy
+        )
         if remaining > 0:
             # SPEC: a market order never rests; its remainder is cancelled,
-            # including the full quantity on an empty book.
+            # including the full quantity on an empty book. The purpose says
+            # whether STP or a lack of liquidity stopped it.
             events.append(
                 Cancelled(
                     order_id=OrderId(seq),
                     remaining=Quantity(remaining),
-                    purpose=CancelPurpose.UNFILLED,
+                    purpose=(
+                        CancelPurpose.SELF_TRADE_PREVENTED
+                        if stp_stopped
+                        else CancelPurpose.UNFILLED
+                    ),
                     seq=seq,
                 )
             )
