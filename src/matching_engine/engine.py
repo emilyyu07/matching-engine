@@ -132,9 +132,8 @@ class Engine:
         ]
 
     def _remove_resting(self, order_id: OrderId) -> None:
-        # Called only for an order the loop just read from the book, so it
-        # must be in the index. Explicit raise, not assert: asserts vanish
-        # under `python -O`.
+        # The order was just read from the book, so an index miss is a bug. Raise
+        # rather than assert: asserts vanish under `python -O`.
         if remove_order(self._book, self._index, order_id) is None:
             raise RuntimeError(f"order index out of sync with book: {order_id}")
 

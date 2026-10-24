@@ -1,8 +1,7 @@
-"""White-box tests for the matching loop's internal-invariant guards.
+"""White-box tests for the matching loop's invariant guards.
 
-These deliberately corrupt Engine's private state, which correct code can
-never do, to prove a broken invariant fails loudly instead of hanging or
-silently continuing.
+They corrupt Engine's private state to prove a broken invariant fails loudly instead
+of hanging or continuing silently.
 """
 
 import pytest

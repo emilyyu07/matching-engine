@@ -1,12 +1,10 @@
-"""Differential test: Engine vs. the reference engine
+"""Differential test: Engine vs. the reference engine on the same random commands.
 
-Feeds the same random command list to both engines. After every command the
-two event lists must be equal, and so must both sides' depth. An exception
-from either engine fails the test: SPEC says invalid input is a Rejected
-event, never a raise.
+After every command the event lists and both sides' depth must match, and neither
+engine may raise (SPEC: invalid input is a Rejected event).
 
-Run with `pytest --hypothesis-show-statistics` to see how often examples
-contain trades, STP cancels, successful cancels and rejects.
+Run with `pytest --hypothesis-show-statistics` to see how often examples hit
+trades, STP cancels, successful cancels and rejects.
 """
 
 from collections import Counter
@@ -48,10 +46,9 @@ Command = Limit | Market | Cancel
 
 @st.composite
 def _weighted[T](draw: st.DrawFn, *pairs: tuple[int, st.SearchStrategy[T]]) -> T:
-    # one_of can't be weighted: repeating the same strategy object counts
-    # once. Instead draw an index into a table holding each strategy
-    # `weight` times. List the most common branch first: shrinking pulls the
-    # index toward 0, so minimal failures prefer that branch.
+    # one_of can't be weighted, so draw an index into a table that repeats each
+    # strategy `weight` times. List the most common branch first: shrinking pulls
+    # the index toward 0.
     table = [strategy for weight, strategy in pairs for _ in range(weight)]
     return draw(table[draw(st.integers(0, len(table) - 1))])
 
@@ -83,10 +80,8 @@ limits = st.builds(
 markets = st.builds(
     lambda side, qty, stp: Market(side, qty, *stp), sides, qtys, stp_pairs
 )
-# Order ids equal the seq of the submitting command, so with lists of at
-# most 60 commands, ids 1..60 overlap live orders. Some cancels miss on
-# purpose (rejecting those is part of SPEC), including 0 and negatives.
-# Always a plain int: SPEC is silent on non-int ids (deferred, D-09).
+# Ids equal their command's seq, so 1..60 overlap live orders; some cancels miss
+# on purpose, including 0 and negatives. Non-int ids are excluded (SPEC silent, D-09).
 cancels = st.builds(Cancel, st.integers(-2, 60).map(OrderId))
 # Limits weighted double so the book has something to match against.
 commands = st.lists(_weighted((2, limits), (1, markets), (1, cancels)), max_size=60)
@@ -143,11 +138,9 @@ def test_engine_matches_reference(cmds: list[Command]) -> None:
 
 
 def test_command_mix_exercises_matching() -> None:
-    # Guards the generator, not the engine: if a strategy change quietly
-    # stops orders crossing, the differential test still passes but proves
-    # little. Measure over whole command lists, never single values:
-    # Hypothesis skips duplicate examples, which skews small value spaces.
-    # derandomize keeps the rates fixed, so the floors can't flake.
+    # Guards the generator, not the engine: the differential test still passes if
+    # orders stop crossing. Measured over whole command lists (Hypothesis skips
+    # duplicate values) and derandomized so the floors can't flake.
     seen: Counter[str] = Counter()
 
     @settings(max_examples=200, derandomize=True, database=None)

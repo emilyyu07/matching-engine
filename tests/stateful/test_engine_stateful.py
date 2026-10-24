@@ -1,18 +1,17 @@
 """Stateful property tests for matching_engine.engine.Engine.
 
 Fuzzes random limit/market/cancel commands (with and without self-trade
-prevention) and rebuilds the book from the emitted events alone. After every
+prevention) and rebuilds the book from emitted events alone. After every
 command it checks that:
 
-- every event carries the seq of the command that produced it, and every
-  command (accepted or rejected, order or cancel) consumes exactly one seq;
-- each Trade hits the front of the opposite side (best price, then oldest
-  seq) at the resting order's price, and never crosses two orders that
-  self-trade prevention should have kept apart;
+- every event carries its command's seq, and every command (accepted or
+  rejected) consumes exactly one seq;
+- each Trade hits the front of the opposite side (best price, then oldest seq)
+  at the resting price, and never crosses orders STP should keep apart;
 - an incoming order's quantity is fully accounted for: filled + rested or
   cancelled == submitted;
-- the event-rebuilt book matches the engine's depth, the engine's book is
-  never crossed, and is_resting agrees with the rebuilt book.
+- the rebuilt book matches the engine's depth and is_resting, and the engine's
+  book is never crossed.
 """
 
 from dataclasses import dataclass

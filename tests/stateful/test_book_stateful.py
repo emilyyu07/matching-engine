@@ -1,8 +1,7 @@
 """Stateful property tests for matching_engine.book.Book.
 
-Fuzzes random add/remove sequences against an independent Python model and
-checks, after every step, that Book's best_bid/best_ask, depth(), and FIFO
-ordering within a price level all agree with that model.
+After every random add/remove, checks best prices, depth, and FIFO order within a
+level against an independent Python model.
 """
 
 from hypothesis import strategies as st
