@@ -1,8 +1,7 @@
-"""Naive matching engine written from SPEC.md only, for differential tests.
+"""Naive engine written from SPEC.md only, for differential tests.
 
-Deliberately simple over fast: one flat list of resting orders, re-scanned
-on every query. Shares only data shapes with the real engine (D-13), never
-logic.
+One flat list, re-scanned on every query. Shares data shapes with the real
+engine, never logic (D-13).
 """
 
 from dataclasses import dataclass
@@ -36,7 +35,7 @@ class _Resting:
 
 
 def _number_error(name: str, value: object) -> str | None:
-    # SPEC Rejects: must be exactly an int (bool and float are not), then > 0.
+    # SPEC Rejects: exactly an int (not bool or float), then > 0.
     if type(value) is not int:
         return f"{name} must be an integer, got {value}"
     if value <= 0:
@@ -45,15 +44,14 @@ def _number_error(name: str, value: object) -> str | None:
 
 
 def _stp_pair_error(stp_id: StpId | None, stp_policy: StpPolicy | None) -> str | None:
-    # SPEC Rejects: stp_id and stp_policy are set together or not at all.
+    # SPEC Rejects: stp_id and stp_policy are both set or both unset.
     if (stp_id is None) != (stp_policy is None):
         return "stp_id and stp_policy must be set together"
     return None
 
 
 def _crosses(side: Side, limit_price: int | None, resting_price: int) -> bool:
-    # SPEC: a market order (no limit price) is always marketable. A limit
-    # BUY crosses resting.price <= order.price; a SELL, >=. Equal matches.
+    # SPEC: market orders always cross; a limit BUY needs resting <= limit, a SELL >=.
     if limit_price is None:
         return True
     if side is Side.BUY:
@@ -64,11 +62,11 @@ def _crosses(side: Side, limit_price: int | None, resting_price: int) -> bool:
 class NaiveEngine:
     def __init__(self) -> None:
         self._last_seq = 0
-        # Both sides, appended in arrival (seq) order.
+        # Both sides, in arrival (seq) order.
         self._book: list[_Resting] = []
 
     def _next_seq(self) -> SeqNo:
-        # SPEC: every command consumes one seq, assigned before validation.
+        # SPEC: every command consumes one seq, before validation.
         self._last_seq += 1
         return SeqNo(self._last_seq)
 
@@ -76,8 +74,7 @@ class NaiveEngine:
         orders = [o for o in self._book if o.side is side]
         if not orders:
             return None
-        # SPEC: best price first (highest bid / lowest ask), then lowest
-        # SeqNo. Relies on OrderId == SeqNo.
+        # SPEC: best price, then lowest seq (OrderId == SeqNo).
         if side is Side.BUY:
             return min(orders, key=lambda o: (-o.price, o.order_id))
         return min(orders, key=lambda o: (o.price, o.order_id))
@@ -91,11 +88,7 @@ class NaiveEngine:
         stp_id: StpId | None,
         stp_policy: StpPolicy | None,
     ) -> tuple[list[Event], int, bool]:
-        """Trade against the opposite side.
-
-        Returns the events, what's left, and whether STP (Cancel Newest)
-        stopped matching.
-        """
+        """Match against the opposite side: (events, remaining, stopped by STP)."""
         opposite = Side.SELL if side is Side.BUY else Side.BUY
         events: list[Event] = []
         remaining = qty
@@ -103,14 +96,12 @@ class NaiveEngine:
             front = self._front(opposite)
             if front is None or not _crosses(side, limit_price, front.price):
                 break
-            # SPEC: a self-match is an incoming order with STP set meeting a
-            # marketable front with the same stp_id. Only the incoming
-            # order's policy counts. Validation guarantees a set stp_id has
-            # a policy.
+            # SPEC: self-match = marketable front with the incoming stp_id; only
+            # the incoming policy counts. Validation pairs stp_id with a policy.
             if stp_id is not None and front.stp_id == stp_id:
                 if stp_policy is StpPolicy.CANCEL_NEWEST:
                     return events, remaining, True
-                # CANCEL_OLDEST: cancel the resting order, retry the new front.
+                # Cancel Oldest: cancel the resting order, retry the new front.
                 self._book.remove(front)
                 events.append(
                     Cancelled(
@@ -133,7 +124,7 @@ class NaiveEngine:
                 )
             )
             remaining -= fill
-            # In place, so a partially filled order keeps its queue position.
+            # In place, so a partial fill keeps its queue position.
             front.remaining -= fill
             if front.remaining == 0:
                 self._book.remove(front)
@@ -149,7 +140,7 @@ class NaiveEngine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._next_seq()
-        # SPEC: checks run price -> quantity -> STP; report only the first.
+        # SPEC: check price -> quantity -> STP; report the first failure.
         error = (
             _number_error("price", price)
             or _number_error("quantity", qty)
@@ -193,7 +184,7 @@ class NaiveEngine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._next_seq()
-        # SPEC: a market order has no price; checks run quantity -> STP.
+        # SPEC: no price to check; quantity -> STP.
         error = _number_error("quantity", qty) or _stp_pair_error(stp_id, stp_policy)
         if error is not None:
             return [Rejected(seq=seq, reason=error)]
@@ -201,9 +192,8 @@ class NaiveEngine:
             seq, side, None, qty, stp_id, stp_policy
         )
         if remaining > 0:
-            # SPEC: a market order never rests; its remainder is cancelled,
-            # including the full quantity on an empty book. The purpose says
-            # whether STP or a lack of liquidity stopped it.
+            # SPEC: a market order never rests; the remainder is cancelled, and the
+            # purpose says whether STP or lack of liquidity stopped it.
             events.append(
                 Cancelled(
                     order_id=OrderId(seq),
@@ -219,7 +209,7 @@ class NaiveEngine:
         return events
 
     def cancel(self, order_id: OrderId) -> list[Event]:
-        seq = self._next_seq()  # SPEC: a rejected cancel consumes a seq too
+        seq = self._next_seq()  # SPEC: rejected cancels consume a seq too
         for order in self._book:
             if order.order_id == order_id:
                 self._book.remove(order)

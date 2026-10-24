@@ -29,6 +29,7 @@ from matching_engine.events import (
     Trade,
 )
 from matching_engine.types import OrderId, Price, Side, StpId, StpPolicy
+from tests.invariants.checker import InvariantChecker
 
 sides = st.sampled_from([Side.BUY, Side.SELL])
 # Mostly valid (both unset, or both set); the third branch also yields
@@ -65,6 +66,7 @@ class EngineStateMachine(RuleBasedStateMachine):
     def __init__(self) -> None:
         super().__init__()
         self.engine = Engine()
+        self.checker = InvariantChecker()
         self.model: dict[OrderId, _Resting] = {}
         self.stp_of: dict[OrderId, StpId | None] = {}
         self.seq = 0
@@ -153,6 +155,7 @@ class EngineStateMachine(RuleBasedStateMachine):
         )
         incoming = _Incoming(OrderId(self.seq + 1), side, qty, stp_id, stp_policy)
         self._apply_new_order(events, incoming)
+        self.checker.observe_order(side, price, qty, stp_id, stp_policy, events)
 
     @rule(
         side=sides,
@@ -172,12 +175,14 @@ class EngineStateMachine(RuleBasedStateMachine):
         incoming = _Incoming(OrderId(self.seq + 1), side, qty, stp_id, stp_policy)
         self._apply_new_order(events, incoming)
         assert all(not isinstance(e, Rested) for e in events)
+        self.checker.observe_order(side, None, qty, stp_id, stp_policy, events)
 
     @rule(order_id=st.integers(min_value=1, max_value=40))
     def cancel(self, order_id: int) -> None:
         oid = OrderId(order_id)
         events = self.engine.cancel(oid)
         self._check_seq(events)
+        self.checker.observe_cancel(oid, events)
         if oid in self.model:
             resting = self.model.pop(oid)
             assert events == [
@@ -210,6 +215,10 @@ class EngineStateMachine(RuleBasedStateMachine):
     def is_resting_agrees_with_event_rebuilt_book(self) -> None:
         for oid in self.stp_of:
             assert self.engine.is_resting(oid) == (oid in self.model)
+
+    @invariant()
+    def shared_invariants_hold(self) -> None:
+        self.checker.check(self.engine)
 
 
 TestEngineStateMachine = EngineStateMachine.TestCase
