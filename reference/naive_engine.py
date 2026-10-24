@@ -35,6 +35,22 @@ class _Resting:
     stp_id: StpId | None
 
 
+def _number_error(name: str, value: object) -> str | None:
+    # SPEC Rejects: must be exactly an int (bool and float are not), then > 0.
+    if type(value) is not int:
+        return f"{name} must be an integer, got {value}"
+    if value <= 0:
+        return f"{name} must be > 0, got {value}"
+    return None
+
+
+def _stp_pair_error(stp_id: StpId | None, stp_policy: StpPolicy | None) -> str | None:
+    # SPEC Rejects: stp_id and stp_policy are set together or not at all.
+    if (stp_id is None) != (stp_policy is None):
+        return "stp_id and stp_policy must be set together"
+    return None
+
+
 def _crosses(side: Side, limit_price: int | None, resting_price: int) -> bool:
     # SPEC: a market order (no limit price) is always marketable. A limit
     # BUY crosses resting.price <= order.price; a SELL, >=. Equal matches.
@@ -105,6 +121,14 @@ class NaiveEngine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._next_seq()
+        # SPEC: checks run price -> quantity -> STP; report only the first.
+        error = (
+            _number_error("price", price)
+            or _number_error("quantity", qty)
+            or _stp_pair_error(stp_id, stp_policy)
+        )
+        if error is not None:
+            return [Rejected(seq=seq, reason=error)]
         events, remaining = self._match(seq, side, price, qty)
         if remaining > 0:
             # SPEC: the remainder rests at its own price, at the back.
@@ -129,6 +153,10 @@ class NaiveEngine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._next_seq()
+        # SPEC: a market order has no price; checks run quantity -> STP.
+        error = _number_error("quantity", qty) or _stp_pair_error(stp_id, stp_policy)
+        if error is not None:
+            return [Rejected(seq=seq, reason=error)]
         events, remaining = self._match(seq, side, None, qty)
         if remaining > 0:
             # SPEC: a market order never rests; its remainder is cancelled,
