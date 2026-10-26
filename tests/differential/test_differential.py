@@ -18,24 +18,24 @@ from tests.invariants.checker import InvariantChecker
 
 @dataclass(frozen=True)
 class Limit:
-    side: Side
+    side: Side | str | None
     price: int | float
     qty: int | float
-    stp_id: StpId | None
-    stp_policy: StpPolicy | None
+    stp_id: StpId | float | str | None
+    stp_policy: StpPolicy | str | None
 
 
 @dataclass(frozen=True)
 class Market:
-    side: Side
+    side: Side | str | None
     qty: int | float
-    stp_id: StpId | None
-    stp_policy: StpPolicy | None
+    stp_id: StpId | float | str | None
+    stp_policy: StpPolicy | str | None
 
 
 @dataclass(frozen=True)
 class Cancel:
-    order_id: OrderId
+    order_id: OrderId | float
 
 
 Command = Limit | Market | Cancel
@@ -54,15 +54,22 @@ invalid_numbers = st.one_of(st.integers(-2, 0), st.floats(), st.booleans())
 # Narrow band so orders cross often; ~10% invalid so rejects interleave with trades.
 prices = _weighted((9, st.integers(98, 102)), (1, invalid_numbers))
 qtys = _weighted((9, st.integers(1, 10)), (1, invalid_numbers))
-sides = st.sampled_from(Side)
-# Mostly both-set or both-unset; the last branch also yields mismatches.
-stp_pairs = st.one_of(
-    st.just((None, None)),
-    st.tuples(st.sampled_from([StpId(1), StpId(2)]), st.sampled_from(StpPolicy)),
-    st.tuples(
-        st.sampled_from([None, StpId(1), StpId(2)]),
-        st.sampled_from([None, *StpPolicy]),
+# Rarely a wrong type: "buy" is Side.BUY's value, not Side.BUY.
+sides = _weighted((19, st.sampled_from(Side)), (1, st.sampled_from(["buy", None])))
+# Valid groups include 0 and negatives (D-09 B: any exact int).
+stp_ids = st.sampled_from([StpId(1), StpId(2), StpId(0), StpId(-1)])
+# Mostly both-set or both-unset; then mismatches, then wrong types per field.
+stp_pairs = _weighted(
+    (3, st.just((None, None))),
+    (3, st.tuples(stp_ids, st.sampled_from(StpPolicy))),
+    (3, st.tuples(st.one_of(st.none(), stp_ids), st.sampled_from([None, *StpPolicy]))),
+    (
+        1,
+        st.tuples(
+            st.sampled_from([True, 1.5, "1"]), st.sampled_from([None, *StpPolicy])
+        ),
     ),
+    (1, st.tuples(st.one_of(st.none(), stp_ids), st.just("cancel_newest"))),
 )
 
 limits = st.builds(
@@ -75,7 +82,7 @@ limits = st.builds(
 markets = st.builds(
     lambda side, qty, stp: Market(side, qty, *stp), sides, qtys, stp_pairs
 )
-# Never-issued ids, including 0 and negatives. Non-int ids excluded (SPEC silent, D-09).
+# Never-issued ids, including 0 and negatives.
 blind_ids = st.integers(-2, 70).map(OrderId)
 
 
@@ -86,6 +93,8 @@ def _cancels(checker: InvariantChecker) -> st.SearchStrategy[Cancel]:
         pairs.insert(0, (1, st.sampled_from(finished)))
     if resting := checker.resting_ids():
         pairs.insert(0, (5, st.sampled_from(resting)))
+        # A live id as a float equals and hashes like it, but must be rejected.
+        pairs.append((1, st.sampled_from(resting).map(float)))
     return st.builds(Cancel, _weighted(*pairs))
 
 
