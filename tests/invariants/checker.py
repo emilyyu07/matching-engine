@@ -117,9 +117,12 @@ class InvariantChecker:
         """Check a limit (limit=price) or market (limit=None) order's events."""
         if isinstance(events[0], Rejected):
             return
-        # Raw inputs: anything accepted must be an exact int.
+        # Raw inputs: anything accepted must have its exact type.
+        assert type(side) is Side
         assert type(qty) is int
         assert limit is None or type(limit) is int
+        assert stp_id is None or type(stp_id) is int
+        assert stp_policy is None or type(stp_policy) is StpPolicy
         order_id = OrderId(events[0].seq)  # SPEC: id == seq
         opposite = _opposite(side)
         filled = 0
@@ -184,7 +187,8 @@ class InvariantChecker:
         """Check a cancel's events."""
         assert len(events) == 1
         event = events[0]
-        if order_id not in self._book:
+        # Exact type first: True/1.0 would find order 1 in the dict.
+        if type(order_id) is not int or order_id not in self._book:
             # Never existed, already filled, or already cancelled.
             assert isinstance(event, Rejected)
             return
