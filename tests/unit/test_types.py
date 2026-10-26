@@ -9,6 +9,7 @@ from matching_engine.types import (
     OrderId,
     Price,
     Quantity,
+    RejectReason,
     SeqNo,
     Side,
     make_price,
@@ -17,11 +18,11 @@ from matching_engine.types import (
 
 
 def test_make_price_rejects_zero() -> None:
-    assert isinstance(make_price(0), str)
+    assert make_price(0) is RejectReason.PRICE_NOT_POSITIVE
 
 
 def test_make_price_rejects_negative() -> None:
-    assert isinstance(make_price(-1), str)
+    assert make_price(-1) is RejectReason.PRICE_NOT_POSITIVE
 
 
 @given(st.integers(min_value=1))
@@ -31,15 +32,15 @@ def test_make_price_accepts_any_positive(raw: int) -> None:
 
 @given(st.integers(max_value=0))
 def test_make_price_rejects_non_positive(raw: int) -> None:
-    assert isinstance(make_price(raw), str)
+    assert make_price(raw) is RejectReason.PRICE_NOT_POSITIVE
 
 
 def test_make_quantity_rejects_zero() -> None:
-    assert isinstance(make_quantity(0), str)
+    assert make_quantity(0) is RejectReason.QTY_NOT_POSITIVE
 
 
 def test_make_quantity_rejects_negative() -> None:
-    assert isinstance(make_quantity(-1), str)
+    assert make_quantity(-1) is RejectReason.QTY_NOT_POSITIVE
 
 
 @given(st.integers(min_value=1))
@@ -49,7 +50,7 @@ def test_make_quantity_accepts_any_positive(raw: int) -> None:
 
 @given(st.integers(max_value=0))
 def test_make_quantity_rejects_non_positive(raw: int) -> None:
-    assert isinstance(make_quantity(raw), str)
+    assert make_quantity(raw) is RejectReason.QTY_NOT_POSITIVE
 
 
 def test_side_has_buy_and_sell() -> None:
@@ -93,16 +94,16 @@ def test_order_remaining_is_mutable_in_place() -> None:
 
 
 def test_make_price_rejects_float() -> None:
-    assert make_price(100.5) == "price must be an integer, got 100.5"  # type: ignore[arg-type]
+    assert make_price(100.5) is RejectReason.PRICE_NOT_INTEGER  # type: ignore[arg-type]
 
 
 def test_make_price_rejects_bool() -> None:
-    assert make_price(True) == "price must be an integer, got True"
+    assert make_price(True) is RejectReason.PRICE_NOT_INTEGER
 
 
 def test_make_quantity_rejects_float() -> None:
-    assert make_quantity(2.5) == "quantity must be an integer, got 2.5"  # type: ignore[arg-type]
+    assert make_quantity(2.5) is RejectReason.QTY_NOT_INTEGER  # type: ignore[arg-type]
 
 
 def test_make_quantity_rejects_bool() -> None:
-    assert make_quantity(True) == "quantity must be an integer, got True"
+    assert make_quantity(True) is RejectReason.QTY_NOT_INTEGER

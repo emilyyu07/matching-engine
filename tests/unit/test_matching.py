@@ -2,7 +2,7 @@
 
 from matching_engine.engine import Engine
 from matching_engine.events import Cancelled, CancelPurpose, Rejected, Rested, Trade
-from matching_engine.types import OrderId, Side, StpId, StpPolicy
+from matching_engine.types import OrderId, RejectReason, Side, StpId, StpPolicy
 
 
 def test_resting_limit_order_with_no_match_produces_rested() -> None:
@@ -166,14 +166,14 @@ def test_market_order_on_empty_book_cancels_full_quantity_unfilled() -> None:
 def test_invalid_price_is_rejected_and_never_touches_the_book() -> None:
     engine = Engine()
     events = engine.submit_limit_order(Side.BUY, 0, 5)
-    assert events == [Rejected(seq=1, reason="price must be > 0, got 0")]
+    assert events == [Rejected(seq=1, reason=RejectReason.PRICE_NOT_POSITIVE)]
     assert engine.best_bid() is None
 
 
 def test_invalid_quantity_is_rejected() -> None:
     engine = Engine()
     events = engine.submit_limit_order(Side.BUY, 100, -1)
-    assert events == [Rejected(seq=1, reason="quantity must be > 0, got -1")]
+    assert events == [Rejected(seq=1, reason=RejectReason.QTY_NOT_POSITIVE)]
 
 
 def test_cancel_emits_cancelled_requested_with_its_own_seq() -> None:
@@ -211,7 +211,7 @@ def test_cancel_of_unknown_id_is_rejected_with_a_seq() -> None:
     engine = Engine()
     engine.submit_limit_order(Side.BUY, 100, 5)
     events = engine.cancel(OrderId(99))
-    assert events == [Rejected(seq=2, reason="order 99 is not resting")]
+    assert events == [Rejected(seq=2, reason=RejectReason.ORDER_NOT_RESTING)]
     assert engine.best_bid() == 100
 
 
@@ -239,7 +239,7 @@ def test_full_fill_forgets_the_order_so_a_later_cancel_is_rejected() -> None:
     engine.submit_limit_order(Side.BUY, 100, 5)
     assert not engine.is_resting(OrderId(1))
     events = engine.cancel(OrderId(1))
-    assert events == [Rejected(seq=3, reason="order 1 is not resting")]
+    assert events == [Rejected(seq=3, reason=RejectReason.ORDER_NOT_RESTING)]
 
 
 def test_read_only_queries_reflect_both_sides() -> None:
@@ -389,21 +389,121 @@ def test_cancel_oldest_works_for_market_orders() -> None:
 def test_float_price_is_rejected() -> None:
     engine = Engine()
     events = engine.submit_limit_order(Side.BUY, 100.5, 5)  # type: ignore[arg-type]
-    assert events == [Rejected(seq=1, reason="price must be an integer, got 100.5")]
+    assert events == [Rejected(seq=1, reason=RejectReason.PRICE_NOT_INTEGER)]
     assert engine.best_bid() is None
 
 
 def test_stp_id_without_policy_is_rejected() -> None:
     engine = Engine()
     events = engine.submit_limit_order(Side.BUY, 100, 5, stp_id=StpId(1))
-    assert events == [
-        Rejected(seq=1, reason="stp_id and stp_policy must be set together")
-    ]
+    assert events == [Rejected(seq=1, reason=RejectReason.STP_FIELDS_MISMATCH)]
 
 
 def test_stp_policy_without_id_is_rejected_for_market_orders_too() -> None:
     engine = Engine()
     events = engine.submit_market_order(Side.BUY, 5, stp_policy=StpPolicy.CANCEL_OLDEST)
+    assert events == [Rejected(seq=1, reason=RejectReason.STP_FIELDS_MISMATCH)]
+
+
+def test_string_side_is_rejected_and_never_touches_the_book() -> None:
+    # "buy" is Side.BUY's value, not Side.BUY; it used to rest on the ask side.
+    engine = Engine()
+    events = engine.submit_limit_order("buy", 100, 5)  # type: ignore[arg-type]
+    assert events == [Rejected(seq=1, reason=RejectReason.SIDE_INVALID)]
+    assert engine.best_bid() is None and engine.best_ask() is None
+
+
+def test_invalid_side_is_rejected_for_market_orders_too() -> None:
+    engine = Engine()
+    events = engine.submit_market_order(None, 5)  # type: ignore[arg-type]
+    assert events == [Rejected(seq=1, reason=RejectReason.SIDE_INVALID)]
+
+
+def test_side_is_checked_before_price() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order("x", 0, 5)  # type: ignore[arg-type]
+    assert events == [Rejected(seq=1, reason=RejectReason.SIDE_INVALID)]
+
+
+def test_bool_stp_id_is_rejected() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order(
+        Side.BUY, 100, 5, stp_id=True, stp_policy=StpPolicy.CANCEL_NEWEST
+    )
+    assert events == [Rejected(seq=1, reason=RejectReason.STP_ID_INVALID)]
+
+
+def test_float_stp_id_is_rejected_for_market_orders_too() -> None:
+    engine = Engine()
+    events = engine.submit_market_order(
+        Side.BUY,
+        5,
+        stp_id=1.5,  # type: ignore[arg-type]
+        stp_policy=StpPolicy.CANCEL_NEWEST,
+    )
+    assert events == [Rejected(seq=1, reason=RejectReason.STP_ID_INVALID)]
+
+
+def test_string_stp_policy_is_rejected() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order(
+        Side.BUY,
+        100,
+        5,
+        stp_id=StpId(1),
+        stp_policy="cancel_newest",  # type: ignore[arg-type]
+    )
+    assert events == [Rejected(seq=1, reason=RejectReason.STP_POLICY_INVALID)]
+
+
+def test_stp_field_types_are_checked_before_the_pair_rule() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order(Side.BUY, 100, 5, stp_id="x")  # type: ignore[arg-type]
+    assert events == [Rejected(seq=1, reason=RejectReason.STP_ID_INVALID)]
+
+
+def test_quantity_is_checked_before_stp_fields() -> None:
+    engine = Engine()
+    events = engine.submit_limit_order(Side.BUY, 100, 0, stp_id="x")  # type: ignore[arg-type]
+    assert events == [Rejected(seq=1, reason=RejectReason.QTY_NOT_POSITIVE)]
+
+
+def test_zero_and_negative_stp_ids_are_ordinary_groups() -> None:
+    # D-09 B: stp_id is a label compared only with ==, so any exact int is valid.
+    engine = Engine()
+    policy = StpPolicy.CANCEL_NEWEST
+    engine.submit_limit_order(Side.SELL, 100, 5, stp_id=StpId(0), stp_policy=policy)
+    events = engine.submit_limit_order(
+        Side.BUY, 100, 5, stp_id=StpId(0), stp_policy=policy
+    )
     assert events == [
-        Rejected(seq=1, reason="stp_id and stp_policy must be set together")
+        Cancelled(
+            order_id=OrderId(2),
+            remaining=5,
+            purpose=CancelPurpose.SELF_TRADE_PREVENTED,
+            seq=2,
+        )
     ]
+    events = engine.submit_limit_order(
+        Side.BUY, 99, 5, stp_id=StpId(-7), stp_policy=policy
+    )
+    assert events == [
+        Rested(order_id=OrderId(3), side=Side.BUY, price=99, remaining=5, seq=3)
+    ]
+
+
+def test_cancel_with_bool_id_does_not_cancel_order_1() -> None:
+    # True == 1 and hashes the same, so a dict lookup used to find order 1.
+    engine = Engine()
+    engine.submit_limit_order(Side.SELL, 100, 5)
+    events = engine.cancel(True)  # type: ignore[arg-type]
+    assert events == [Rejected(seq=2, reason=RejectReason.ORDER_NOT_RESTING)]
+    assert engine.is_resting(OrderId(1))
+
+
+def test_cancel_with_float_id_does_not_cancel_order_1() -> None:
+    engine = Engine()
+    engine.submit_limit_order(Side.SELL, 100, 5)
+    events = engine.cancel(1.0)  # type: ignore[arg-type]
+    assert events == [Rejected(seq=2, reason=RejectReason.ORDER_NOT_RESTING)]
+    assert engine.is_resting(OrderId(1))

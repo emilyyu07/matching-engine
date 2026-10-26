@@ -18,6 +18,7 @@ from matching_engine.types import (
     OrderId,
     Price,
     Quantity,
+    RejectReason,
     SeqNo,
     Side,
     StpId,
@@ -34,19 +35,34 @@ class _Resting:
     stp_id: StpId | None
 
 
-def _number_error(name: str, value: object) -> str | None:
+def _number_error(
+    value: object, not_integer: RejectReason, not_positive: RejectReason
+) -> RejectReason | None:
     # SPEC Rejects: exactly an int (not bool or float), then > 0.
     if type(value) is not int:
-        return f"{name} must be an integer, got {value}"
+        return not_integer
     if value <= 0:
-        return f"{name} must be > 0, got {value}"
+        return not_positive
     return None
 
 
-def _stp_pair_error(stp_id: StpId | None, stp_policy: StpPolicy | None) -> str | None:
-    # SPEC Rejects: stp_id and stp_policy are both set or both unset.
+def _side_error(side: object) -> RejectReason | None:
+    # SPEC Rejects: side must be exactly a Side.
+    if type(side) is not Side:
+        return RejectReason.SIDE_INVALID
+    return None
+
+
+def _stp_pair_error(
+    stp_id: StpId | None, stp_policy: StpPolicy | None
+) -> RejectReason | None:
+    # SPEC Rejects: each field's type, then both set or both unset.
+    if stp_id is not None and type(stp_id) is not int:
+        return RejectReason.STP_ID_INVALID
+    if stp_policy is not None and type(stp_policy) is not StpPolicy:
+        return RejectReason.STP_POLICY_INVALID
     if (stp_id is None) != (stp_policy is None):
-        return "stp_id and stp_policy must be set together"
+        return RejectReason.STP_FIELDS_MISMATCH
     return None
 
 
@@ -140,10 +156,17 @@ class NaiveEngine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._next_seq()
-        # SPEC: check price -> quantity -> STP; report the first failure.
+        # SPEC: check side -> price -> quantity -> STP; report the first failure.
         error = (
-            _number_error("price", price)
-            or _number_error("quantity", qty)
+            _side_error(side)
+            or _number_error(
+                price,
+                RejectReason.PRICE_NOT_INTEGER,
+                RejectReason.PRICE_NOT_POSITIVE,
+            )
+            or _number_error(
+                qty, RejectReason.QTY_NOT_INTEGER, RejectReason.QTY_NOT_POSITIVE
+            )
             or _stp_pair_error(stp_id, stp_policy)
         )
         if error is not None:
@@ -184,8 +207,14 @@ class NaiveEngine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._next_seq()
-        # SPEC: no price to check; quantity -> STP.
-        error = _number_error("quantity", qty) or _stp_pair_error(stp_id, stp_policy)
+        # SPEC: no price to check; side -> quantity -> STP.
+        error = (
+            _side_error(side)
+            or _number_error(
+                qty, RejectReason.QTY_NOT_INTEGER, RejectReason.QTY_NOT_POSITIVE
+            )
+            or _stp_pair_error(stp_id, stp_policy)
+        )
         if error is not None:
             return [Rejected(seq=seq, reason=error)]
         events, remaining, stp_stopped = self._match(
@@ -211,7 +240,8 @@ class NaiveEngine:
     def cancel(self, order_id: OrderId) -> list[Event]:
         seq = self._next_seq()  # SPEC: rejected cancels consume a seq too
         for order in self._book:
-            if order.order_id == order_id:
+            # SPEC: id must be exactly an int; True == 1 must not match order 1.
+            if type(order_id) is int and order.order_id == order_id:
                 self._book.remove(order)
                 return [
                     Cancelled(
@@ -221,7 +251,7 @@ class NaiveEngine:
                         seq=seq,
                     )
                 ]
-        return [Rejected(seq=seq, reason=f"order {order_id} is not resting")]
+        return [Rejected(seq=seq, reason=RejectReason.ORDER_NOT_RESTING)]
 
     def depth(self, side: Side) -> list[tuple[int, int]]:
         totals: dict[int, int] = {}

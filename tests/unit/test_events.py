@@ -1,7 +1,7 @@
 """Unit tests for matching_engine.events: Trade/Rested/Cancelled/Rejected."""
 
 from matching_engine.events import Cancelled, CancelPurpose, Rejected, Rested, Trade
-from matching_engine.types import OrderId, Price, Quantity, SeqNo, Side
+from matching_engine.types import OrderId, Price, Quantity, RejectReason, SeqNo, Side
 
 
 def test_trade_carries_resting_price_and_both_order_ids() -> None:
@@ -77,7 +77,7 @@ def test_cancelled_unfilled_purpose_for_market_order_remainder() -> None:
 
 
 def test_rejected_carries_seq_but_no_order_id() -> None:
-    event = Rejected(seq=SeqNo(4), reason="price must be > 0, got -1")
+    event = Rejected(seq=SeqNo(4), reason=RejectReason.PRICE_NOT_POSITIVE)
     assert event.seq == 4
     assert not hasattr(event, "order_id")
 
@@ -89,7 +89,7 @@ def test_events_of_different_variants_are_never_equal() -> None:
         purpose=CancelPurpose.REQUESTED,
         seq=SeqNo(2),
     )
-    rejected = Rejected(seq=SeqNo(1), reason="x")
+    rejected = Rejected(seq=SeqNo(1), reason=RejectReason.ORDER_NOT_RESTING)
     assert cancelled != rejected
 
 

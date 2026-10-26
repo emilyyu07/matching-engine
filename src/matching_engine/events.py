@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from matching_engine.types import OrderId, Price, Quantity, SeqNo, Side
+from matching_engine.types import OrderId, Price, Quantity, RejectReason, SeqNo, Side
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class Cancelled:
 @dataclass(frozen=True)
 class Rejected:
     seq: SeqNo
-    reason: str
+    reason: RejectReason
 
 
 Event = Trade | Rested | Cancelled | Rejected

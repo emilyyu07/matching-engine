@@ -17,6 +17,7 @@ from matching_engine.types import (
     OrderId,
     Price,
     Quantity,
+    RejectReason,
     Side,
     StpId,
     StpPolicy,
@@ -36,9 +37,23 @@ def remove_order(
     return handle
 
 
-def _stp_error(stp_id: StpId | None, stp_policy: StpPolicy | None) -> str | None:
+def _side_error(side: Side) -> RejectReason | None:
+    # Exact type: a str like "buy" would otherwise fall through to SELL.
+    if type(side) is not Side:
+        return RejectReason.SIDE_INVALID
+    return None
+
+
+def _stp_error(
+    stp_id: StpId | None, stp_policy: StpPolicy | None
+) -> RejectReason | None:
+    # Each field well-formed first, then the rule relating the two.
+    if stp_id is not None and type(stp_id) is not int:
+        return RejectReason.STP_ID_INVALID
+    if stp_policy is not None and type(stp_policy) is not StpPolicy:
+        return RejectReason.STP_POLICY_INVALID
     if (stp_id is None) != (stp_policy is None):
-        return "stp_id and stp_policy must be set together"
+        return RejectReason.STP_FIELDS_MISMATCH
     return None
 
 
@@ -70,11 +85,14 @@ class Engine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._counter.advance()
+        side_error = _side_error(side)
+        if side_error is not None:
+            return [Rejected(seq=seq, reason=side_error)]
         price_result = make_price(price)
-        if isinstance(price_result, str):
+        if isinstance(price_result, RejectReason):
             return [Rejected(seq=seq, reason=price_result)]
         qty_result = make_quantity(qty)
-        if isinstance(qty_result, str):
+        if isinstance(qty_result, RejectReason):
             return [Rejected(seq=seq, reason=qty_result)]
         stp_error = _stp_error(stp_id, stp_policy)
         if stp_error is not None:
@@ -100,8 +118,11 @@ class Engine:
         stp_policy: StpPolicy | None = None,
     ) -> list[Event]:
         seq = self._counter.advance()
+        side_error = _side_error(side)
+        if side_error is not None:
+            return [Rejected(seq=seq, reason=side_error)]
         qty_result = make_quantity(qty)
-        if isinstance(qty_result, str):
+        if isinstance(qty_result, RejectReason):
             return [Rejected(seq=seq, reason=qty_result)]
         stp_error = _stp_error(stp_id, stp_policy)
         if stp_error is not None:
@@ -119,9 +140,14 @@ class Engine:
 
     def cancel(self, order_id: OrderId) -> list[Event]:
         seq = self._counter.advance()
-        handle = remove_order(self._book, self._index, order_id)
+        # Exact type: True and 1.0 equal and hash like 1, so the index finds order 1.
+        handle = (
+            remove_order(self._book, self._index, order_id)
+            if type(order_id) is int
+            else None
+        )
         if handle is None:
-            return [Rejected(seq=seq, reason=f"order {order_id} is not resting")]
+            return [Rejected(seq=seq, reason=RejectReason.ORDER_NOT_RESTING)]
         return [
             Cancelled(
                 order_id=order_id,
